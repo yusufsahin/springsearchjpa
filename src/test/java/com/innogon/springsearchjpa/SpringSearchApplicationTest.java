@@ -3125,6 +3125,20 @@ class SpringSearchApplicationTest {
         Assertions.assertThrows(SearchQueryException.class, () -> authorRepository.findAll(spec));
     }
 
+    @Test
+    void basicFieldNavigationThrowsInvalidFieldException() {
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("name.something:value").build();
+        Assertions.assertThrows(SearchQueryException.class, () -> authorRepository.findAll(spec));
+    }
+
+    @Test
+    void basicFieldNavigationWithExistsStrategyThrowsInvalidFieldException() {
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("name.something:value").build();
+        Assertions.assertThrows(SearchQueryException.class, () -> authorRepository.findAll(spec));
+    }
+
     // --- EXISTS Strategy Tests ---
 
     @Test

@@ -69,7 +69,16 @@ public class SpecificationImpl<T> implements Specification<T> {
         boolean hasCollectionJoin = false;
         for (int i = 0; i < nestedKey.length - 1; i++) {
             String segment = nestedKey[i];
-            boolean isCollection = isPluralAttribute(current, segment);
+            Attribute<?, ?> attr = resolveAttribute(current, segment);
+            boolean isCollection = attr instanceof PluralAttribute<?, ?, ?>;
+
+            if (!isCollection && attr instanceof SingularAttribute<?, ?> sa
+                    && !(sa.getType() instanceof ManagedType<?>)) {
+                throw new InvalidFieldException(
+                        "Cannot navigate through basic field '" + segment + "' on "
+                                + current.getJavaType().getSimpleName());
+            }
+
             JoinType joinType = isCollection ? JoinType.LEFT : JoinType.INNER;
             current = getOrCreateJoin(current, segment, joinType);
             if (isCollection) {
@@ -111,6 +120,7 @@ public class SpecificationImpl<T> implements Specification<T> {
     /**
      * Checks whether any intermediate path segment (all except the last) is a
      * collection/plural attribute. Used to decide if the EXISTS strategy applies.
+     * Also validates that intermediate segments are navigable associations.
      */
     private boolean hasCollectionInIntermediatePath(Root<T> root, String[] nestedKey) {
         ManagedType<?> currentType = root.getModel();
@@ -120,9 +130,14 @@ public class SpecificationImpl<T> implements Specification<T> {
                 if (attr instanceof PluralAttribute<?, ?, ?>) {
                     return true;
                 }
-                if (attr instanceof SingularAttribute<?, ?> sa
-                        && sa.getType() instanceof ManagedType<?> mt) {
-                    currentType = mt;
+                if (attr instanceof SingularAttribute<?, ?> sa) {
+                    if (sa.getType() instanceof ManagedType<?> mt) {
+                        currentType = mt;
+                    } else {
+                        throw new InvalidFieldException(
+                                "Cannot navigate through basic field '" + nestedKey[i] + "' on "
+                                        + currentType.getJavaType().getSimpleName());
+                    }
                 }
             } catch (IllegalArgumentException e) {
                 throw new InvalidFieldException(
@@ -135,14 +150,18 @@ public class SpecificationImpl<T> implements Specification<T> {
 
     // ---- JPA Metamodel helpers ----
 
-    private boolean isPluralAttribute(From<?, ?> from, String name) {
+    private Attribute<?, ?> resolveAttribute(From<?, ?> from, String name) {
         ManagedType<?> managedType = getManagedType(from);
         try {
-            return managedType.getAttribute(name) instanceof PluralAttribute<?, ?, ?>;
+            return managedType.getAttribute(name);
         } catch (IllegalArgumentException e) {
             throw new InvalidFieldException(
                     "Field '" + name + "' does not exist on " + from.getJavaType().getSimpleName());
         }
+    }
+
+    private boolean isPluralAttribute(From<?, ?> from, String name) {
+        return resolveAttribute(from, name) instanceof PluralAttribute<?, ?, ?>;
     }
 
     private static ManagedType<?> getManagedType(From<?, ?> from) {

@@ -1,8 +1,10 @@
 package com.innogon.springsearchjpa.configuration;
 
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Import;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.context.annotation.Bean;
 
 /**
  * Auto-configures {@link SearchExceptionHandler} to convert
@@ -11,11 +13,17 @@ import org.springframework.context.annotation.Import;
  * Opt out by setting {@code spring-search.exception-handler.enabled=false}.
  */
 @AutoConfiguration
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnProperty(
         name = "spring-search.exception-handler.enabled",
         havingValue = "true",
         matchIfMissing = true
 )
-@Import(SearchExceptionHandler.class)
 public class SearchExceptionAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean(SearchExceptionHandler.class)
+    public SearchExceptionHandler searchExceptionHandler() {
+        return new SearchExceptionHandler();
+    }
 }
