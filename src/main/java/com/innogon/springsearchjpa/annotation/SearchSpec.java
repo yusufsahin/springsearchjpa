@@ -1,5 +1,7 @@
 package com.innogon.springsearchjpa.annotation;
 
+import com.innogon.springsearchjpa.CollectionJoinStrategy;
+
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -52,4 +54,16 @@ public @interface SearchSpec {
      * length will result in a 400 Bad Request.
      */
     int maxLength() default 1024;
+
+    /**
+     * Strategy for handling collection associations in nested search paths.
+     * <ul>
+     *   <li>{@link CollectionJoinStrategy#SHARED_JOIN} — LEFT JOIN + DISTINCT (default).
+     *       AND'd predicates on the same collection apply to the same row.</li>
+     *   <li>{@link CollectionJoinStrategy#EXISTS} — EXISTS subqueries. Better for
+     *       pagination and large datasets, but AND'd predicates on the same
+     *       collection are evaluated independently.</li>
+     * </ul>
+     */
+    CollectionJoinStrategy collectionJoinStrategy() default CollectionJoinStrategy.SHARED_JOIN;
 }

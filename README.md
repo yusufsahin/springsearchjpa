@@ -304,11 +304,41 @@ Database
 
 ## Nested Fields
 
-Search through entity relationships using dot notation:
+Search through entity relationships using dot notation. All JPA association types are supported:
+
+| Association     | Direction         | Example                                     |
+|-----------------|-------------------|---------------------------------------------|
+| `@ManyToOne`    | child → parent    | `GET /books?search=author.name:Tolkien`     |
+| `@OneToMany`    | parent → children | `GET /authors?search=books.title:Hobbit`    |
+| `@OneToOne`     | either direction  | `GET /authors?search=publisher.name:Penguin`|
+| `@ManyToMany`   | either direction  | `GET /books?search=genres.name:Fantasy`     |
 
 ```
+# ManyToOne — find books by author name
 GET /books?search=author.name:Tolkien
+
+# OneToMany — find authors who wrote a specific book
+GET /authors?search=books.title:Hobbit
+
+# OneToOne — find authors by publisher
+GET /authors?search=publisher.name:HarperCollins
+
+# ManyToMany — find books by genre
+GET /books?search=genres.name:Fantasy
+
+# Combine nested and direct fields
+GET /authors?search=books.title:Hobbit AND name:Tolkien
+
+# Wildcards work on nested fields too
+GET /authors?search=books.title:*ring*
+
+# IN operator with nested fields
+GET /authors?search=books.title IN [Hobbit,Foundation]
 ```
+
+**Join strategy:**
+- Singular associations (`@ManyToOne`, `@OneToOne`) use `INNER JOIN`
+- Collection associations (`@OneToMany`, `@ManyToMany`) use `LEFT JOIN` with `DISTINCT` to avoid duplicate results
 
 Both whitelist and blacklist support root-level matching for nested paths. Blacklisting `author` also blocks `author.name`, `author.email`, etc.
 

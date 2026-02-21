@@ -1,1 +1,2 @@
 com.innogon.springsearchjpa.configuration.ResolverConf
+com.innogon.springsearchjpa.configuration.SearchExceptionAutoConfiguration

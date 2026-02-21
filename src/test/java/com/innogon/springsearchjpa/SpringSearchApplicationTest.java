@@ -65,6 +65,34 @@ class SpringSearchApplicationTest {
         return createSearchSpec("", false, new String[]{"userFirstName"});
     }
 
+    private static SearchSpec createSearchSpec(String searchParam, boolean caseSensitive,
+            String[] blackList, CollectionJoinStrategy strategy) {
+        return (SearchSpec) Proxy.newProxyInstance(
+                SearchSpec.class.getClassLoader(),
+                new Class[]{SearchSpec.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "searchParam" -> searchParam;
+                    case "caseSensitiveFlag" -> caseSensitive;
+                    case "blackListedFields" -> blackList;
+                    case "whiteListedFields" -> new String[]{};
+                    case "required" -> false;
+                    case "defaultValue" -> "";
+                    case "maxLength" -> 1024;
+                    case "collectionJoinStrategy" -> strategy;
+                    case "annotationType" -> SearchSpec.class;
+                    default -> method.getDefaultValue();
+                }
+        );
+    }
+
+    private static SearchSpec existsStrategy() {
+        return createSearchSpec("", true, new String[]{}, CollectionJoinStrategy.EXISTS);
+    }
+
+    private static SearchSpec existsStrategyCI() {
+        return createSearchSpec("", false, new String[]{}, CollectionJoinStrategy.EXISTS);
+    }
+
     private static SearchSpec createAnnotation(boolean caseSensitive, String[] whiteList, String[] blackList) {
         return (SearchSpec) Proxy.newProxyInstance(
                 SearchSpec.class.getClassLoader(),
@@ -2557,5 +2585,761 @@ class SpringSearchApplicationTest {
                 .withSearch("userFirstName!*ne").build();
         List<Users> users = userRepository.findAll(spec);
         Assertions.assertEquals(2, users.size());
+    }
+
+    // --- Deep Join / Association Filter Tests ---
+
+    @Autowired
+    private BookRepository bookRepository;
+
+    @Autowired
+    private PublisherRepository publisherRepository;
+
+    @Autowired
+    private GenreRepository genreRepository;
+
+    // @OneToMany: Author -> books.title
+    @Test
+    void oneToManyEqualsFilter() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Book lotr = new Book();
+        lotr.setTitle("Lord of the Rings");
+        tolkien.addBook(lotr);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title:Hobbit").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void oneToManyContainsFilter() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Book lotr = new Book();
+        lotr.setTitle("Lord of the Rings");
+        tolkien.addBook(lotr);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title:*ring*").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(0, authors.size());
+
+        Specification<Author> spec2 = new SpecificationsBuilder<Author>(caseInsensitive())
+                .withSearch("books.title:*ring*").build();
+        List<Author> authors2 = authorRepository.findAll(spec2);
+        Assertions.assertEquals(1, authors2.size());
+        Assertions.assertEquals("Tolkien", authors2.get(0).getName());
+    }
+
+    @Test
+    void oneToManyInFilter() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Author asimov = new Author();
+        asimov.setName("Asimov");
+        Book foundation = new Book();
+        foundation.setTitle("Foundation");
+        asimov.addBook(foundation);
+        authorRepository.save(asimov);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title IN [Hobbit,1984]").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(2, authors.size());
+        Set<String> names = authors.stream().map(Author::getName).collect(Collectors.toSet());
+        Assertions.assertTrue(names.contains("Tolkien"));
+        Assertions.assertTrue(names.contains("Orwell"));
+    }
+
+    @Test
+    void oneToManyCombinedWithDirectField() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author fakeAuthor = new Author();
+        fakeAuthor.setName("Fake");
+        Book fakeHobbit = new Book();
+        fakeHobbit.setTitle("Hobbit");
+        fakeAuthor.addBook(fakeHobbit);
+        authorRepository.save(fakeAuthor);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title:Hobbit AND name:Tolkien").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void oneToManyEmptyResult() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title:NonExistentBook").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertTrue(authors.isEmpty());
+    }
+
+    @Test
+    void oneToManyDistinct() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Book lotr = new Book();
+        lotr.setTitle("Lord of the Rings");
+        tolkien.addBook(lotr);
+        authorRepository.save(tolkien);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title:Hobbit OR books.title:'Lord of the Rings'").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    // @ManyToOne: Book -> author.name (regression)
+    @Test
+    void manyToOneEqualsFilter() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Book lotr = new Book();
+        lotr.setTitle("Lord of the Rings");
+        tolkien.addBook(lotr);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseSensitive())
+                .withSearch("author.name:Tolkien").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(2, books.size());
+        books.forEach(b -> Assertions.assertEquals("Tolkien", b.getAuthor().getName()));
+    }
+
+    @Test
+    void manyToOneContainsFilter() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseInsensitive())
+                .withSearch("author.name:*olk*").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(1, books.size());
+        Assertions.assertEquals("Hobbit", books.get(0).getTitle());
+    }
+
+    // @OneToOne: Author -> publisher.name
+    @Test
+    void oneToOneEqualsFilter() {
+        Publisher pub1 = new Publisher();
+        pub1.setName("HarperCollins");
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        tolkien.setPublisher(pub1);
+        authorRepository.save(tolkien);
+
+        Publisher pub2 = new Publisher();
+        pub2.setName("Secker & Warburg");
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        orwell.setPublisher(pub2);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("publisher.name:HarperCollins").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void oneToOneContainsFilter() {
+        Publisher pub1 = new Publisher();
+        pub1.setName("HarperCollins");
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        tolkien.setPublisher(pub1);
+        authorRepository.save(tolkien);
+
+        Publisher pub2 = new Publisher();
+        pub2.setName("Secker & Warburg");
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        orwell.setPublisher(pub2);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseInsensitive())
+                .withSearch("publisher.name:*collins*").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void oneToOneNoMatchReturnsEmpty() {
+        Publisher pub = new Publisher();
+        pub.setName("HarperCollins");
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        tolkien.setPublisher(pub);
+        authorRepository.save(tolkien);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("publisher.name:NonExistent").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertTrue(authors.isEmpty());
+    }
+
+    // @ManyToMany: Book -> genres.name
+    @Test
+    void manyToManyEqualsFilter() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        Genre scifi = new Genre();
+        scifi.setName("Sci-Fi");
+
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author asimov = new Author();
+        asimov.setName("Asimov");
+        Book foundation = new Book();
+        foundation.setTitle("Foundation");
+        foundation.addGenre(scifi);
+        asimov.addBook(foundation);
+        authorRepository.save(asimov);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseSensitive())
+                .withSearch("genres.name:Fantasy").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(1, books.size());
+        Assertions.assertEquals("Hobbit", books.get(0).getTitle());
+    }
+
+    @Test
+    void manyToManyContainsFilter() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        Genre scifi = new Genre();
+        scifi.setName("Sci-Fi");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        bookRepository.save(hobbit);
+
+        Book foundation = new Book();
+        foundation.setTitle("Foundation");
+        foundation.addGenre(scifi);
+        bookRepository.save(foundation);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseInsensitive())
+                .withSearch("genres.name:*fi*").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(1, books.size());
+        Assertions.assertEquals("Foundation", books.get(0).getTitle());
+    }
+
+    @Test
+    void manyToManyInFilter() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        Genre scifi = new Genre();
+        scifi.setName("Sci-Fi");
+        Genre dystopia = new Genre();
+        dystopia.setName("Dystopia");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        bookRepository.save(hobbit);
+
+        Book foundation = new Book();
+        foundation.setTitle("Foundation");
+        foundation.addGenre(scifi);
+        bookRepository.save(foundation);
+
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        book1984.addGenre(dystopia);
+        bookRepository.save(book1984);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseSensitive())
+                .withSearch("genres.name IN [Fantasy,Dystopia]").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(2, books.size());
+        Set<String> titles = books.stream().map(Book::getTitle).collect(Collectors.toSet());
+        Assertions.assertTrue(titles.contains("Hobbit"));
+        Assertions.assertTrue(titles.contains("1984"));
+    }
+
+    @Test
+    void manyToManyDistinct() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        Genre adventure = new Genre();
+        adventure.setName("Adventure");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        hobbit.addGenre(adventure);
+        bookRepository.save(hobbit);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseSensitive())
+                .withSearch("genres.name:Fantasy OR genres.name:Adventure").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(1, books.size());
+        Assertions.assertEquals("Hobbit", books.get(0).getTitle());
+    }
+
+    @Test
+    void manyToManyNoMatchReturnsEmpty() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        bookRepository.save(hobbit);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(caseSensitive())
+                .withSearch("genres.name:Horror").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertTrue(books.isEmpty());
+    }
+
+    // Reverse: Genre -> books.title (@ManyToMany from inverse side)
+    @Test
+    void manyToManyInverseFilter() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        bookRepository.save(hobbit);
+
+        Book lotr = new Book();
+        lotr.setTitle("Lord of the Rings");
+        lotr.addGenre(fantasy);
+        bookRepository.save(lotr);
+
+        Specification<Genre> spec = new SpecificationsBuilder<Genre>(caseSensitive())
+                .withSearch("books.title:Hobbit").build();
+        List<Genre> genres = genreRepository.findAll(spec);
+        Assertions.assertEquals(1, genres.size());
+        Assertions.assertEquals("Fantasy", genres.get(0).getName());
+    }
+
+    // Reverse: Publisher -> author.name (@OneToOne from inverse side)
+    @Test
+    void oneToOneInverseFilter() {
+        Publisher pub = new Publisher();
+        pub.setName("HarperCollins");
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        tolkien.setPublisher(pub);
+        authorRepository.save(tolkien);
+
+        Publisher pub2 = new Publisher();
+        pub2.setName("Penguin");
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        orwell.setPublisher(pub2);
+        authorRepository.save(orwell);
+
+        Specification<Publisher> spec = new SpecificationsBuilder<Publisher>(caseSensitive())
+                .withSearch("author.name:Tolkien").build();
+        List<Publisher> publishers = publisherRepository.findAll(spec);
+        Assertions.assertEquals(1, publishers.size());
+        Assertions.assertEquals("HarperCollins", publishers.get(0).getName());
+    }
+
+    // Deep nesting: 3+ levels
+    @Test
+    void deepNestedThreeLevels_ManyToMany_ManyToOne() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        hobbit.addGenre(fantasy);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        Genre dystopia = new Genre();
+        dystopia.setName("Dystopia");
+        book1984.addGenre(dystopia);
+        authorRepository.save(orwell);
+
+        Specification<Genre> spec = new SpecificationsBuilder<Genre>(caseSensitive())
+                .withSearch("books.author.name:Tolkien").build();
+        List<Genre> genres = genreRepository.findAll(spec);
+        Assertions.assertEquals(1, genres.size());
+        Assertions.assertEquals("Fantasy", genres.get(0).getName());
+    }
+
+    @Test
+    void deepNestedThreeLevels_OneToMany_OneToOne() {
+        Publisher pub = new Publisher();
+        pub.setName("HarperCollins");
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        tolkien.setPublisher(pub);
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Publisher pub2 = new Publisher();
+        pub2.setName("Penguin");
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        orwell.setPublisher(pub2);
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Publisher> spec = new SpecificationsBuilder<Publisher>(caseSensitive())
+                .withSearch("author.books.title:Hobbit").build();
+        List<Publisher> publishers = publisherRepository.findAll(spec);
+        Assertions.assertEquals(1, publishers.size());
+        Assertions.assertEquals("HarperCollins", publishers.get(0).getName());
+    }
+
+    @Test
+    void deepNestedThreeLevels_noMatch() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        hobbit.addGenre(fantasy);
+        authorRepository.save(tolkien);
+
+        Specification<Genre> spec = new SpecificationsBuilder<Genre>(caseSensitive())
+                .withSearch("books.author.name:NonExistent").build();
+        List<Genre> genres = genreRepository.findAll(spec);
+        Assertions.assertTrue(genres.isEmpty());
+    }
+
+    // --- Invalid Field Validation (JPA Metamodel) ---
+
+    @Test
+    void invalidNestedFieldThrowsInvalidFieldException() {
+        Author author = new Author();
+        author.setName("Test");
+        authorRepository.save(author);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.nonExistentField:value").build();
+        Assertions.assertThrows(SearchQueryException.class, () -> authorRepository.findAll(spec));
+    }
+
+    @Test
+    void invalidIntermediateFieldThrowsInvalidFieldException() {
+        Specification<Author> spec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("nonExistentRelation.name:value").build();
+        Assertions.assertThrows(SearchQueryException.class, () -> authorRepository.findAll(spec));
+    }
+
+    // --- EXISTS Strategy Tests ---
+
+    @Test
+    void existsOneToManyEquals() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("books.title:Hobbit").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void existsOneToManyContainsCaseInsensitive() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategyCI())
+                .withSearch("books.title:*hobb*").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void existsOneToManyIn() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        authorRepository.save(orwell);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("books.title IN [Hobbit,1984]").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(2, authors.size());
+    }
+
+    @Test
+    void existsManyToManyEquals() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        bookRepository.save(hobbit);
+
+        Book foundation = new Book();
+        foundation.setTitle("Foundation");
+        bookRepository.save(foundation);
+
+        Specification<Book> spec = new SpecificationsBuilder<Book>(existsStrategy())
+                .withSearch("genres.name:Fantasy").build();
+        List<Book> books = bookRepository.findAll(spec);
+        Assertions.assertEquals(1, books.size());
+        Assertions.assertEquals("Hobbit", books.get(0).getTitle());
+    }
+
+    @Test
+    void existsDeepNestedThreeLevels() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        hobbit.addGenre(fantasy);
+        authorRepository.save(tolkien);
+
+        Author orwell = new Author();
+        orwell.setName("Orwell");
+        Book book1984 = new Book();
+        book1984.setTitle("1984");
+        orwell.addBook(book1984);
+        Genre dystopia = new Genre();
+        dystopia.setName("Dystopia");
+        book1984.addGenre(dystopia);
+        authorRepository.save(orwell);
+
+        Specification<Genre> spec = new SpecificationsBuilder<Genre>(existsStrategy())
+                .withSearch("books.author.name:Tolkien").build();
+        List<Genre> genres = genreRepository.findAll(spec);
+        Assertions.assertEquals(1, genres.size());
+        Assertions.assertEquals("Fantasy", genres.get(0).getName());
+    }
+
+    @Test
+    void existsNoDuplicatesWithMultipleBooks() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        Book lotr = new Book();
+        lotr.setTitle("Lord of the Rings");
+        tolkien.addBook(lotr);
+        authorRepository.save(tolkien);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("books.title:Hobbit OR books.title:'Lord of the Rings'").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    @Test
+    void existsSingularOnlyPathUnaffected() {
+        Publisher pub = new Publisher();
+        pub.setName("HarperCollins");
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        tolkien.setPublisher(pub);
+        authorRepository.save(tolkien);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("publisher.name:HarperCollins").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertEquals(1, authors.size());
+        Assertions.assertEquals("Tolkien", authors.get(0).getName());
+    }
+
+    /**
+     * Demonstrates the semantic difference between SHARED_JOIN and EXISTS:
+     * Tolkien has "Hobbit" (Fantasy) and "Silmarillion" (Mythology).
+     * Query: books.title:Hobbit AND books.genres.name:Mythology
+     *
+     * SHARED_JOIN: same book must satisfy both → no match (Hobbit is Fantasy, not Mythology)
+     * EXISTS: independent subqueries → match (one book is Hobbit, another has Mythology)
+     */
+    @Test
+    void existsSemanticDifference_independentSubqueries() {
+        Genre fantasy = new Genre();
+        fantasy.setName("Fantasy");
+        Genre mythology = new Genre();
+        mythology.setName("Mythology");
+
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        hobbit.addGenre(fantasy);
+        tolkien.addBook(hobbit);
+
+        Book silmarillion = new Book();
+        silmarillion.setTitle("Silmarillion");
+        silmarillion.addGenre(mythology);
+        tolkien.addBook(silmarillion);
+
+        authorRepository.save(tolkien);
+
+        Specification<Author> existsSpec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("books.title:Hobbit AND books.genres.name:Mythology").build();
+        List<Author> existsResult = authorRepository.findAll(existsSpec);
+        Assertions.assertEquals(1, existsResult.size(), "EXISTS: independent subqueries should match");
+
+        Specification<Author> joinSpec = new SpecificationsBuilder<Author>(caseSensitive())
+                .withSearch("books.title:Hobbit AND books.genres.name:Mythology").build();
+        List<Author> joinResult = authorRepository.findAll(joinSpec);
+        Assertions.assertEquals(0, joinResult.size(), "SHARED_JOIN: same-row semantics should not match");
+    }
+
+    @Test
+    void existsEmptyResult() {
+        Author tolkien = new Author();
+        tolkien.setName("Tolkien");
+        Book hobbit = new Book();
+        hobbit.setTitle("Hobbit");
+        tolkien.addBook(hobbit);
+        authorRepository.save(tolkien);
+
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("books.title:NonExistent").build();
+        List<Author> authors = authorRepository.findAll(spec);
+        Assertions.assertTrue(authors.isEmpty());
+    }
+
+    @Test
+    void existsInvalidFieldStillValidated() {
+        Specification<Author> spec = new SpecificationsBuilder<Author>(existsStrategy())
+                .withSearch("books.fakeField:value").build();
+        Assertions.assertThrows(SearchQueryException.class, () -> authorRepository.findAll(spec));
     }
 }

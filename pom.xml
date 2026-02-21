@@ -102,7 +102,6 @@
 				<excludes>
 					<exclude>${grammar.directory}/**/*</exclude>
 					<exclude>Query*</exclude>
-					<exclude>com/innogon/springsearchjpa/configuration/**/*</exclude>
 					<exclude>com/innogon/springsearchjpa/exception/**/*</exclude>
 				</excludes>
 				</configuration>
